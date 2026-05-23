@@ -1,0 +1,527 @@
+import 'dotenv/config';
+import express from 'express';
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import cron from 'node-cron';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const TZ = process.env.TZ || 'Asia/Taipei';
+const DB_PATH = path.join(__dirname, 'data', 'db.json');
+const LINE_CHANNEL_SECRET = process.env.LINE_CHANNEL_SECRET || '';
+const LINE_CHANNEL_ACCESS_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN || '';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+const LINE_API_BASE = 'https://api.line.me/v2/bot';
+
+const scheduledJobs = new Map();
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function shortId(id = '') {
+  if (!id) return '';
+  if (id.length <= 12) return id;
+  return `${id.slice(0, 6)}...${id.slice(-6)}`;
+}
+
+function uid(prefix) {
+  return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function ensureDb() {
+  if (!fs.existsSync(DB_PATH)) {
+    fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+    fs.writeFileSync(DB_PATH, JSON.stringify({ recipients: [], templates: [], schedules: [], logs: [] }, null, 2));
+  }
+}
+
+function readDb() {
+  ensureDb();
+  const raw = fs.readFileSync(DB_PATH, 'utf8');
+  const db = JSON.parse(raw || '{}');
+  db.recipients ??= [];
+  db.templates ??= [];
+  db.schedules ??= [];
+  db.logs ??= [];
+  return db;
+}
+
+function writeDb(db) {
+  fs.writeFileSync(DB_PATH, JSON.stringify(db, null, 2));
+}
+
+function addLog(entry) {
+  const db = readDb();
+  db.logs.unshift({ id: uid('log'), createdAt: nowIso(), ...entry });
+  db.logs = db.logs.slice(0, 300);
+  writeDb(db);
+}
+
+function normalizeMessages(text) {
+  return [{ type: 'text', text: String(text || '').slice(0, 5000) }];
+}
+
+function renderText(text, recipient = {}) {
+  const d = new Date();
+  const date = new Intl.DateTimeFormat('zh-TW', { timeZone: TZ, dateStyle: 'medium' }).format(d);
+  const time = new Intl.DateTimeFormat('zh-TW', { timeZone: TZ, timeStyle: 'short' }).format(d);
+  return String(text || '')
+    .replaceAll('{收件人名稱}', recipient.name || '')
+    .replaceAll('{LINE_ID}', recipient.lineId || '')
+    .replaceAll('{日期}', date)
+    .replaceAll('{時間}', time);
+}
+
+function verifyLineSignature(rawBody, signature) {
+  if (!LINE_CHANNEL_SECRET) return false;
+  const expected = crypto
+    .createHmac('sha256', LINE_CHANNEL_SECRET)
+    .update(rawBody)
+    .digest('base64');
+
+  const expectedBuffer = Buffer.from(expected);
+  const signatureBuffer = Buffer.from(signature || '');
+  if (expectedBuffer.length !== signatureBuffer.length) return false;
+  return crypto.timingSafeEqual(expectedBuffer, signatureBuffer);
+}
+
+async function lineRequest(pathname, { method = 'POST', body } = {}) {
+  if (!LINE_CHANNEL_ACCESS_TOKEN) {
+    throw new Error('尚未設定 LINE_CHANNEL_ACCESS_TOKEN，請先設定 .env');
+  }
+
+  const res = await fetch(`${LINE_API_BASE}${pathname}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${LINE_CHANNEL_ACCESS_TOKEN}`,
+      ...(body ? { 'Content-Type': 'application/json' } : {})
+    },
+    body: body ? JSON.stringify(body) : undefined
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`LINE API ${res.status}: ${text || res.statusText}`);
+  }
+
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+async function pushText(to, text, notificationDisabled = false) {
+  return lineRequest('/message/push', {
+    body: { to, messages: normalizeMessages(text), notificationDisabled }
+  });
+}
+
+async function replyText(replyToken, text) {
+  return lineRequest('/message/reply', {
+    body: { replyToken, messages: normalizeMessages(text) }
+  });
+}
+
+async function multicastText(userIds, text, notificationDisabled = false) {
+  const chunks = [];
+  for (let i = 0; i < userIds.length; i += 500) chunks.push(userIds.slice(i, i + 500));
+  for (const chunk of chunks) {
+    await lineRequest('/message/multicast', {
+      body: { to: chunk, messages: normalizeMessages(text), notificationDisabled }
+    });
+  }
+}
+
+async function tryGetUserProfile(userId) {
+  try {
+    return await lineRequest(`/profile/${encodeURIComponent(userId)}`, { method: 'GET' });
+  } catch {
+    return null;
+  }
+}
+
+async function tryGetGroupSummary(groupId) {
+  try {
+    return await lineRequest(`/group/${encodeURIComponent(groupId)}/summary`, { method: 'GET' });
+  } catch {
+    return null;
+  }
+}
+
+function upsertRecipient({ type, lineId, name, notes, source = 'manual' }) {
+  const db = readDb();
+  let item = db.recipients.find((r) => r.type === type && r.lineId === lineId);
+  const t = nowIso();
+  if (!item) {
+    item = {
+      id: uid('rcp'),
+      type,
+      lineId,
+      name: name || `${type === 'group' ? '未命名群組' : type === 'room' ? '未命名多人聊天室' : '未命名使用者'} ${shortId(lineId)}`,
+      notes: notes || '',
+      source,
+      createdAt: t,
+      updatedAt: t
+    };
+    db.recipients.unshift(item);
+  } else {
+    item.name = name || item.name;
+    item.notes = notes ?? item.notes;
+    item.updatedAt = t;
+  }
+  writeDb(db);
+  return item;
+}
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_TOKEN) return next();
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (token === ADMIN_TOKEN) return next();
+  return res.status(401).json({ error: '未授權，請確認 ADMIN_TOKEN' });
+}
+
+async function sendToRecipients({ recipientIds = [], templateId, text, notificationDisabled = false, reason = 'manual' }) {
+  const db = readDb();
+  const recipients = db.recipients.filter((r) => recipientIds.includes(r.id));
+  const template = db.templates.find((t) => t.id === templateId);
+  const rawText = text || template?.text || '';
+  if (!rawText.trim()) throw new Error('訊息內容不可為空');
+  if (recipients.length === 0) throw new Error('請至少選擇一個收件對象');
+
+  const userRecipients = recipients.filter((r) => r.type === 'user');
+  const otherRecipients = recipients.filter((r) => r.type !== 'user');
+  const results = [];
+
+  if (userRecipients.length > 1 && !rawText.includes('{收件人名稱}') && !rawText.includes('{LINE_ID}')) {
+    await multicastText(userRecipients.map((r) => r.lineId), renderText(rawText, {}), notificationDisabled);
+    results.push({ type: 'multicast', count: userRecipients.length });
+  } else {
+    for (const r of userRecipients) {
+      await pushText(r.lineId, renderText(rawText, r), notificationDisabled);
+      results.push({ type: 'push-user', recipientId: r.id, name: r.name });
+    }
+  }
+
+  for (const r of otherRecipients) {
+    await pushText(r.lineId, renderText(rawText, r), notificationDisabled);
+    results.push({ type: `push-${r.type}`, recipientId: r.id, name: r.name });
+  }
+
+  addLog({
+    type: 'send',
+    status: 'success',
+    reason,
+    templateId: templateId || null,
+    recipientIds,
+    messagePreview: rawText.slice(0, 120),
+    results
+  });
+
+  return results;
+}
+
+function stopSchedules() {
+  for (const job of scheduledJobs.values()) job.stop();
+  scheduledJobs.clear();
+}
+
+function loadSchedules() {
+  stopSchedules();
+  const db = readDb();
+  for (const s of db.schedules) {
+    if (!s.enabled) continue;
+    if (!cron.validate(s.cron)) {
+      addLog({ type: 'schedule', status: 'invalid_cron', scheduleId: s.id, cron: s.cron, messagePreview: s.name });
+      continue;
+    }
+    const job = cron.schedule(
+      s.cron,
+      async () => {
+        try {
+          await sendToRecipients({
+            recipientIds: s.recipientIds,
+            templateId: s.templateId,
+            text: s.text,
+            notificationDisabled: Boolean(s.notificationDisabled),
+            reason: `schedule:${s.name}`
+          });
+        } catch (err) {
+          addLog({
+            type: 'schedule',
+            status: 'error',
+            scheduleId: s.id,
+            messagePreview: err.message
+          });
+        }
+      },
+      { timezone: TZ }
+    );
+    scheduledJobs.set(s.id, job);
+  }
+}
+
+app.post('/webhook', express.raw({ type: '*/*' }), async (req, res) => {
+  const rawBody = req.body.toString('utf8');
+  const signature = req.headers['x-line-signature'];
+
+  if (!verifyLineSignature(rawBody, signature)) {
+    addLog({ type: 'webhook', status: 'invalid_signature', messagePreview: 'LINE signature 驗證失敗' });
+    return res.status(401).send('Invalid signature');
+  }
+
+  let body;
+  try {
+    body = JSON.parse(rawBody);
+  } catch {
+    return res.status(400).send('Invalid JSON');
+  }
+
+  res.status(200).send('OK');
+
+  for (const event of body.events || []) {
+    try {
+      const source = event.source || {};
+      let recipient = null;
+
+      if (source.groupId) {
+        const summary = await tryGetGroupSummary(source.groupId);
+        recipient = upsertRecipient({
+          type: 'group',
+          lineId: source.groupId,
+          name: summary?.groupName,
+          notes: '由 LINE webhook 自動紀錄。可在後台重新命名。',
+          source: 'webhook'
+        });
+      } else if (source.roomId) {
+        recipient = upsertRecipient({
+          type: 'room',
+          lineId: source.roomId,
+          notes: '由 LINE webhook 自動紀錄。可在後台重新命名。',
+          source: 'webhook'
+        });
+      } else if (source.userId) {
+        const profile = await tryGetUserProfile(source.userId);
+        recipient = upsertRecipient({
+          type: 'user',
+          lineId: source.userId,
+          name: profile?.displayName,
+          notes: '由 LINE webhook 自動紀錄。可在後台重新命名。',
+          source: 'webhook'
+        });
+      }
+
+      const text = event.message?.type === 'text' ? event.message.text.trim() : '';
+      if (event.type === 'join' && event.replyToken) {
+        await replyText(event.replyToken, '嗨嗨～我已加入群組，也已紀錄這個群組 ID。\n請在群組輸入：綁定群組 班級名稱\n例如：綁定群組 7cd-1-IQ-B');
+      } else if (text.startsWith('綁定群組') && source.groupId && event.replyToken) {
+        const name = text.replace(/^綁定群組\s*/u, '').trim();
+        if (name) {
+          recipient = upsertRecipient({
+            type: 'group',
+            lineId: source.groupId,
+            name,
+            notes: '使用群組指令綁定',
+            source: 'command'
+          });
+          await replyText(event.replyToken, `已綁定此群組為：${recipient.name}`);
+        }
+      } else if (text.startsWith('我是') && source.userId && event.replyToken) {
+        const name = text.replace(/^我是\s*/u, '').trim();
+        if (name) {
+          recipient = upsertRecipient({
+            type: 'user',
+            lineId: source.userId,
+            name,
+            notes: '使用個人指令綁定',
+            source: 'command'
+          });
+          await replyText(event.replyToken, `已綁定您的名稱為：${recipient.name}`);
+        }
+      } else if ((text === 'ID' || text === 'id') && event.replyToken) {
+        const idText = source.groupId || source.roomId || source.userId || 'unknown';
+        await replyText(event.replyToken, `目前來源：${recipient?.name || '未命名'}\n類型：${recipient?.type || source.type || 'unknown'}\nID：${idText}`);
+      } else if ((text === '嗨嗨' || text.toLowerCase() === 'hi') && event.replyToken) {
+        await replyText(event.replyToken, '嗨嗨～我已收到，也已紀錄這個 LINE 來源。');
+      }
+
+      addLog({
+        type: 'webhook',
+        status: 'received',
+        sourceType: source.type,
+        sourceId: source.groupId || source.roomId || source.userId || null,
+        messagePreview: text || event.type
+      });
+    } catch (err) {
+      addLog({ type: 'webhook', status: 'error', messagePreview: err.message });
+    }
+  }
+});
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
+
+app.get('/api/health', (req, res) => {
+  res.json({ ok: true, timezone: TZ, lineTokenReady: Boolean(LINE_CHANNEL_ACCESS_TOKEN), adminProtected: Boolean(ADMIN_TOKEN) });
+});
+
+app.use('/api', requireAdmin);
+
+app.get('/api/db', (req, res) => {
+  const db = readDb();
+  res.json(db);
+});
+
+app.get('/api/recipients', (req, res) => res.json(readDb().recipients));
+
+app.post('/api/recipients', (req, res) => {
+  const { type, lineId, name, notes } = req.body || {};
+  if (!['user', 'group', 'room'].includes(type)) return res.status(400).json({ error: 'type 必須是 user/group/room' });
+  if (!lineId) return res.status(400).json({ error: 'lineId 不可空白' });
+  const item = upsertRecipient({ type, lineId, name, notes, source: 'manual' });
+  res.json(item);
+});
+
+app.put('/api/recipients/:id', (req, res) => {
+  const db = readDb();
+  const item = db.recipients.find((r) => r.id === req.params.id);
+  if (!item) return res.status(404).json({ error: '找不到收件對象' });
+  const { type, lineId, name, notes } = req.body || {};
+  if (type && !['user', 'group', 'room'].includes(type)) return res.status(400).json({ error: 'type 必須是 user/group/room' });
+  Object.assign(item, {
+    type: type || item.type,
+    lineId: lineId || item.lineId,
+    name: name ?? item.name,
+    notes: notes ?? item.notes,
+    updatedAt: nowIso()
+  });
+  writeDb(db);
+  res.json(item);
+});
+
+app.delete('/api/recipients/:id', (req, res) => {
+  const db = readDb();
+  db.recipients = db.recipients.filter((r) => r.id !== req.params.id);
+  for (const s of db.schedules) {
+    s.recipientIds = (s.recipientIds || []).filter((id) => id !== req.params.id);
+  }
+  writeDb(db);
+  loadSchedules();
+  res.json({ ok: true });
+});
+
+app.get('/api/templates', (req, res) => res.json(readDb().templates));
+
+app.post('/api/templates', (req, res) => {
+  const { title, text } = req.body || {};
+  if (!title || !text) return res.status(400).json({ error: 'title/text 不可空白' });
+  const db = readDb();
+  const item = { id: uid('tpl'), title, text, createdAt: nowIso(), updatedAt: nowIso() };
+  db.templates.unshift(item);
+  writeDb(db);
+  res.json(item);
+});
+
+app.put('/api/templates/:id', (req, res) => {
+  const db = readDb();
+  const item = db.templates.find((t) => t.id === req.params.id);
+  if (!item) return res.status(404).json({ error: '找不到罐頭訊息' });
+  item.title = req.body.title ?? item.title;
+  item.text = req.body.text ?? item.text;
+  item.updatedAt = nowIso();
+  writeDb(db);
+  res.json(item);
+});
+
+app.delete('/api/templates/:id', (req, res) => {
+  const db = readDb();
+  db.templates = db.templates.filter((t) => t.id !== req.params.id);
+  writeDb(db);
+  res.json({ ok: true });
+});
+
+app.get('/api/schedules', (req, res) => res.json(readDb().schedules));
+
+app.post('/api/schedules', (req, res) => {
+  const { name, cron: cronExpr, recipientIds, templateId, text, enabled = true, notificationDisabled = false } = req.body || {};
+  if (!name) return res.status(400).json({ error: '排程名稱不可空白' });
+  if (!cronExpr || !cron.validate(cronExpr)) return res.status(400).json({ error: 'cron 格式錯誤' });
+  if (!Array.isArray(recipientIds) || recipientIds.length === 0) return res.status(400).json({ error: '請選擇收件對象' });
+  const db = readDb();
+  const item = {
+    id: uid('sch'),
+    name,
+    cron: cronExpr,
+    recipientIds,
+    templateId: templateId || null,
+    text: text || '',
+    enabled: Boolean(enabled),
+    notificationDisabled: Boolean(notificationDisabled),
+    createdAt: nowIso(),
+    updatedAt: nowIso()
+  };
+  db.schedules.unshift(item);
+  writeDb(db);
+  loadSchedules();
+  res.json(item);
+});
+
+app.put('/api/schedules/:id', (req, res) => {
+  const db = readDb();
+  const item = db.schedules.find((s) => s.id === req.params.id);
+  if (!item) return res.status(404).json({ error: '找不到排程' });
+  const payload = req.body || {};
+  if (payload.cron && !cron.validate(payload.cron)) return res.status(400).json({ error: 'cron 格式錯誤' });
+  Object.assign(item, {
+    name: payload.name ?? item.name,
+    cron: payload.cron ?? item.cron,
+    recipientIds: payload.recipientIds ?? item.recipientIds,
+    templateId: payload.templateId ?? item.templateId,
+    text: payload.text ?? item.text,
+    enabled: payload.enabled ?? item.enabled,
+    notificationDisabled: payload.notificationDisabled ?? item.notificationDisabled,
+    updatedAt: nowIso()
+  });
+  writeDb(db);
+  loadSchedules();
+  res.json(item);
+});
+
+app.delete('/api/schedules/:id', (req, res) => {
+  const db = readDb();
+  db.schedules = db.schedules.filter((s) => s.id !== req.params.id);
+  writeDb(db);
+  loadSchedules();
+  res.json({ ok: true });
+});
+
+app.post('/api/send-now', async (req, res) => {
+  try {
+    const results = await sendToRecipients({
+      recipientIds: req.body.recipientIds,
+      templateId: req.body.templateId,
+      text: req.body.text,
+      notificationDisabled: Boolean(req.body.notificationDisabled),
+      reason: 'manual'
+    });
+    res.json({ ok: true, results });
+  } catch (err) {
+    addLog({ type: 'send', status: 'error', messagePreview: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/logs', (req, res) => res.json(readDb().logs.slice(0, 100)));
+
+loadSchedules();
+app.listen(PORT, () => {
+  console.log(`LINE Bot canned app running on http://localhost:${PORT}`);
+  console.log(`Webhook URL: http://localhost:${PORT}/webhook`);
+});

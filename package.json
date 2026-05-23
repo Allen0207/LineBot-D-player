@@ -1,0 +1,20 @@
+{
+  "name": "line-bot-canned-app",
+  "version": "1.0.0",
+  "description": "LINE Bot 罐頭訊息後台外掛：群組/個人發送、排程、Webhook ID 綁定",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node --watch server.js",
+    "start": "node server.js",
+    "check": "node --check server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3"
+  }
+}

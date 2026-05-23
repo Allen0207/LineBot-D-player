@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>玩樂高手 LINE Bot 罐頭訊息外掛</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="hero">
+      <div>
+        <p class="eyebrow">LINE Bot Admin</p>
+        <h1>玩樂高手 LINE Bot 罐頭訊息外掛</h1>
+        <p>管理群組、家長 userId、罐頭訊息與固定排程。可直接發送到 LINE 群組或指定個人私訊。</p>
+      </div>
+      <div class="status-card" id="statusCard">讀取中...</div>
+    </header>
+
+    <main class="layout">
+      <section class="card login-card">
+        <h2>後台登入</h2>
+        <p>輸入 `.env` 裡設定的 <code>ADMIN_TOKEN</code>。本機測試若未設定 ADMIN_TOKEN，可留空。</p>
+        <div class="row">
+          <input id="adminToken" type="password" placeholder="ADMIN_TOKEN" />
+          <button id="saveTokenBtn">儲存登入</button>
+          <button id="clearTokenBtn" class="ghost">清除</button>
+        </div>
+      </section>
+
+      <section class="card span-2">
+        <div class="section-title">
+          <div>
+            <h2>立即發送</h2>
+            <p>選擇收件對象與罐頭訊息，直接推送到 LINE。</p>
+          </div>
+          <button id="sendNowBtn">立即發送</button>
+        </div>
+        <div class="grid-2">
+          <label>
+            罐頭訊息
+            <select id="sendTemplate"></select>
+          </label>
+          <label>
+            靜音通知
+            <select id="sendSilent">
+              <option value="false">否，正常通知</option>
+              <option value="true">是，不跳通知</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          發送內容，可直接修改
+          <textarea id="sendText" rows="6" placeholder="選擇罐頭訊息後會自動帶入，也可直接輸入內容"></textarea>
+        </label>
+        <div>
+          <p class="label-like">收件對象</p>
+          <div id="sendRecipients" class="checkbox-list"></div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>新增收件對象</h2>
+        <div class="stack">
+          <label>
+            類型
+            <select id="recipientType">
+              <option value="group">群組 groupId</option>
+              <option value="user">個人 userId</option>
+              <option value="room">多人聊天室 roomId</option>
+            </select>
+          </label>
+          <label>
+            名稱
+            <input id="recipientName" placeholder="例如：7cd-1-IQ-B 競賽群 / Ryan 媽媽" />
+          </label>
+          <label>
+            LINE ID
+            <input id="recipientLineId" placeholder="Cxxxx / Uxxxx / Rxxxx" />
+          </label>
+          <label>
+            備註
+            <input id="recipientNotes" placeholder="可留空" />
+          </label>
+          <button id="addRecipientBtn">新增/更新收件對象</button>
+        </div>
+        <div class="hint">
+          群組可在 LINE 群輸入：<code>綁定群組 7cd-1-IQ-B</code> 自動紀錄。個人可私訊 Bot：<code>我是 Ryan媽媽</code>。
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>新增罐頭訊息</h2>
+        <div class="stack">
+          <label>
+            標題
+            <input id="templateTitle" placeholder="例如：競賽班上課提醒" />
+          </label>
+          <label>
+            內容
+            <textarea id="templateText" rows="8" placeholder="可使用 {收件人名稱}、{日期}、{時間}"></textarea>
+          </label>
+          <button id="addTemplateBtn">新增罐頭訊息</button>
+        </div>
+      </section>
+
+      <section class="card span-2">
+        <div class="section-title">
+          <div>
+            <h2>固定排程</h2>
+            <p>適合每次上課固定發送，例如每週六 13:00 發到 7cd-1-IQ-B。</p>
+          </div>
+        </div>
+        <div class="grid-2">
+          <label>
+            排程名稱
+            <input id="scheduleName" placeholder="例如：7cd-1-IQ-B 每週上課提醒" />
+          </label>
+          <label>
+            罐頭訊息
+            <select id="scheduleTemplate"></select>
+          </label>
+        </div>
+        <div>
+          <p class="label-like">收件對象</p>
+          <div id="scheduleRecipients" class="checkbox-list"></div>
+        </div>
+        <div class="grid-2">
+          <label>
+            發送時間
+            <input id="scheduleTime" type="time" value="13:00" />
+          </label>
+          <label>
+            進階 cron，可留空自動產生
+            <input id="scheduleCron" placeholder="例如：0 13 * * 6 = 每週六 13:00" />
+          </label>
+        </div>
+        <div>
+          <p class="label-like">星期</p>
+          <div id="scheduleDays" class="days">
+            <label><input type="checkbox" value="1" />一</label>
+            <label><input type="checkbox" value="2" />二</label>
+            <label><input type="checkbox" value="3" />三</label>
+            <label><input type="checkbox" value="4" />四</label>
+            <label><input type="checkbox" value="5" />五</label>
+            <label><input type="checkbox" value="6" checked />六</label>
+            <label><input type="checkbox" value="0" />日</label>
+          </div>
+        </div>
+        <label>
+          排程自訂內容，可留空使用罐頭訊息
+          <textarea id="scheduleText" rows="4" placeholder="留空使用上方罐頭訊息內容"></textarea>
+        </label>
+        <div class="row">
+          <label class="inline"><input id="scheduleEnabled" type="checkbox" checked /> 啟用排程</label>
+          <label class="inline"><input id="scheduleSilent" type="checkbox" /> 靜音通知</label>
+          <button id="addScheduleBtn">新增排程</button>
+        </div>
+      </section>
+
+      <section class="card span-2">
+        <h2>收件對象列表</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>名稱</th><th>類型</th><th>LINE ID</th><th>備註</th><th>操作</th></tr>
+            </thead>
+            <tbody id="recipientTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card span-2">
+        <h2>罐頭訊息列表</h2>
+        <div id="templateList" class="list"></div>
+      </section>
+
+      <section class="card span-2">
+        <h2>排程列表</h2>
+        <div id="scheduleList" class="list"></div>
+      </section>
+
+      <section class="card span-2">
+        <h2>發送 / Webhook / LINE Bot 紀錄</h2>
+        <div id="logList" class="log-list"></div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast"></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
