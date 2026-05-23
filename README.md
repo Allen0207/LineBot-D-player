@@ -181,4 +181,28 @@ git branch -M main
 git push -u origin main
 ```
 
-如果你想我幫你自動建立 GitHub 倉庫並推送，請提供授權方式（例如使用 `gh` CLI 並在你本機登入）或告訴我要哪個遠端 URL，我會提供確切指令。 
+如果你想我幫你自動建立 GitHub 倉庫並推送，請提供授權方式（例如使用 `gh` CLI 並在你本機登入）或告訴我要哪個遠端 URL，我會提供確切指令。
+
+## Git 自動 / 手動同步說明
+
+專案已新增 `git-sync.ps1`，可以切換自動或手動推送：
+
+- 自動模式（預設）：
+
+```bash
+npm run git-sync
+```
+
+- 手動模式：
+
+```bash
+npm run git-sync:manual
+```
+
+手動模式會完成 `pull`、`add`、`commit`，但不會 `push`；你可以再執行：
+
+```bash
+git push origin main
+```
+
+如果你要改成其他分支，請把 `main` 換成你的分支名稱。 

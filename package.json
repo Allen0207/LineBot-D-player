@@ -7,7 +7,9 @@
   "scripts": {
     "dev": "node --watch server.js",
     "start": "node server.js",
-    "check": "node --check server.js"
+    "check": "node --check server.js",
+    "git-sync": "powershell -ExecutionPolicy Bypass -File ./git-sync.ps1 -Mode auto",
+    "git-sync:manual": "powershell -ExecutionPolicy Bypass -File ./git-sync.ps1 -Mode manual"
   },
   "engines": {
     "node": ">=18"

@@ -12,6 +12,14 @@ function token() {
   return localStorage.getItem('lineBotAdminToken') || '';
 }
 
+if (window.location.pathname.endsWith('/dashboard.html') && !token()) {
+  window.location.href = '/';
+}
+
+if (window.location.pathname === '/' && token()) {
+  window.location.href = '/dashboard.html';
+}
+
 function setToast(message, isError = false) {
   const toast = $('#toast');
   toast.textContent = message;
@@ -318,17 +326,41 @@ async function deleteItem(kind, id) {
 }
 
 function bindEvents() {
-  $('#adminToken').value = token();
-  $('#saveTokenBtn').addEventListener('click', async () => {
-    localStorage.setItem('lineBotAdminToken', $('#adminToken').value.trim());
-    setToast('登入資訊已儲存');
-    await safeLoadAll();
-  });
-  $('#clearTokenBtn').addEventListener('click', () => {
-    localStorage.removeItem('lineBotAdminToken');
-    $('#adminToken').value = '';
-    setToast('已清除登入資訊');
-  });
+  const adminTokenInput = $('#adminToken');
+  const saveTokenBtn = $('#saveTokenBtn');
+  const clearTokenBtn = $('#clearTokenBtn');
+  const logoutBtn = $('#logoutBtn');
+
+  if (adminTokenInput) {
+    adminTokenInput.value = token();
+  }
+  if (saveTokenBtn) {
+    saveTokenBtn.addEventListener('click', async () => {
+      const tokenValue = adminTokenInput?.value.trim() || '';
+      localStorage.setItem('lineBotAdminToken', tokenValue);
+      setToast('登入資訊已儲存');
+      if (window.location.pathname === '/' || window.location.pathname.endsWith('/index.html')) {
+        setTimeout(() => {
+          window.location.href = '/dashboard.html';
+        }, 300);
+      } else {
+        await safeLoadAll();
+      }
+    });
+  }
+  if (clearTokenBtn) {
+    clearTokenBtn.addEventListener('click', () => {
+      localStorage.removeItem('lineBotAdminToken');
+      if (adminTokenInput) adminTokenInput.value = '';
+      setToast('已清除登入資訊');
+    });
+  }
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      localStorage.removeItem('lineBotAdminToken');
+      window.location.href = '/';
+    });
+  }
   $('#sendTemplate').addEventListener('change', syncSendTextFromTemplate);
   $('#addRecipientBtn').addEventListener('click', () => wrap(addRecipient));
   $('#addTemplateBtn').addEventListener('click', () => wrap(addTemplate));
