@@ -1,4 +1,4 @@
-# 玩樂高手 LINE Bot 罐頭訊息外掛 App
+# LineBot-D-player_LINE Bot 罐頭訊息外掛 App
 
 這是一個可以直接用 VSCode 開啟的 Node.js 專案，用來管理 LINE Bot 的罐頭訊息、指定群組發送、指定個人發送與固定排程。
 
