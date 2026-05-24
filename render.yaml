@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: line-bot-canned-app
+    env: node
+    plan: free
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    env:
+      - key: NODE_ENV
+        value: production
