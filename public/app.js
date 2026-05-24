@@ -64,6 +64,7 @@ async function loadHealth() {
       <strong>系統狀態</strong><br />
       Web App：正常<br />
       LINE Token：${h.lineTokenReady ? '已設定' : '未設定'}<br />
+      自動收件對象：已開啟<br />
       後台保護：${h.adminProtected ? '已開啟' : '未設定 ADMIN_TOKEN'}<br />
       時區：${h.timezone}
     `;
@@ -110,7 +111,7 @@ function recipientCheckboxHtml(name, recipient) {
 function renderRecipientCheckboxes() {
   const html = state.recipients.length
     ? state.recipients.map(r => recipientCheckboxHtml('sendRecipient', r)).join('')
-    : '<p class="meta">尚無收件對象。請先把 Bot 加入群組，或手動新增 groupId/userId。</p>';
+    : '<p class="meta">尚無收件對象。請先讓家長加入官方帳號好友，或把 Bot 加入群組，系統會自動建立。</p>';
   $('#sendRecipients').innerHTML = html;
   $('#scheduleRecipients').innerHTML = state.recipients.length
     ? state.recipients.map(r => recipientCheckboxHtml('scheduleRecipient', r)).join('')
@@ -223,7 +224,7 @@ async function addRecipient() {
   $('#recipientName').value = '';
   $('#recipientLineId').value = '';
   $('#recipientNotes').value = '';
-  setToast('收件對象已新增/更新');
+  setToast('收件對象已新增/更新（一般情況可由 LINE 自動建立）');
   await loadAll();
 }
 

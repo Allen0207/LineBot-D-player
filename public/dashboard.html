@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-Hant">
   <head>
     <meta charset="UTF-8" />
@@ -11,7 +11,7 @@
       <div>
         <p class="eyebrow">LINE Bot Admin</p>
         <h1>玩樂高手 LINE Bot 罐頭訊息外掛</h1>
-        <p>管理群組、家長 userId、罐頭訊息與固定排程。可直接發送到 LINE 群組或指定個人私訊。</p>
+        <p>自動建立加入好友與群組的收件對象，管理罐頭訊息與固定排程。可直接發送到 LINE 群組或指定個人私訊。</p>
       </div>
       <div>
         <div class="status-card" id="statusCard">讀取中...</div>
@@ -52,7 +52,7 @@
       </section>
 
       <section class="card">
-        <h2>新增收件對象</h2>
+        <h2>收件對象管理</h2>
         <div class="stack">
           <label>
             類型
@@ -74,10 +74,10 @@
             備註
             <input id="recipientNotes" placeholder="可留空" />
           </label>
-          <button id="addRecipientBtn">新增/更新收件對象</button>
+          <button id="addRecipientBtn">手動新增/更新收件對象</button>
         </div>
         <div class="hint">
-          群組可在 LINE 群輸入：<code>綁定群組 7cd-1-IQ-B</code> 自動紀錄。個人可私訊 Bot：<code>我是 Ryan媽媽</code>。
+          現在不需要輸入 ID。只要家長加入官方帳號好友，或 Bot 被加入群組，系統會自動建立收件對象。這區只保留給特殊情況手動補資料；若要把自動名稱改成班級名稱，可在下方列表按「編輯」，或在群組輸入：<code>綁定群組 7cd-1-IQ-B</code>。
         </div>
       </section>
 

@@ -6,7 +6,4 @@ data/db.json
 npm-debug.log*
 .idea/
 dist/
-*.lognode_modules/
-.env
-.DS_Store
-npm-debug.log*
+*.log
